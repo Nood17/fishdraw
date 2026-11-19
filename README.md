@@ -133,6 +133,36 @@ cp -r bin/ painter/ <部署目录>/
 | | `VAELoader` | `flux2-vae.safetensors` | 解码 |
 | 第二遍 | `CheckpointLoaderSimple` | `Illustrious-XL-v1.0.safetensors` | 图生图换画风（danbooru 标签，denoise 默认 0.45） |
 
+### 模型下载（约 19G，本仓库不托管权重）
+
+全部权重都是 Hugging Face 上的公开模型，按文件名下载到 ComfyUI 对应目录即可：
+
+| 文件 | 大小 | 来源 | 放进 `ComfyUI/models/` |
+|---|---|---|---|
+| `moss_image_sft_int8_convrot.safetensors` | 5.4G | [Comfy-Org/MOSS-Image](https://huggingface.co/Comfy-Org/MOSS-Image) | `diffusion_models/` |
+| `qwen3.5_9b_w4a8_gptq.safetensors` | 7.3G | [Comfy-Org/MOSS-Image](https://huggingface.co/Comfy-Org/MOSS-Image) | `text_encoders/` |
+| `flux2-vae.safetensors` | 0.34G | [Comfy-Org/MOSS-Image](https://huggingface.co/Comfy-Org/MOSS-Image)（[Comfy-Org/Flux-2-Dev](https://huggingface.co/Comfy-Org/Flux-2-Dev) 里也有同名文件） | `vae/` |
+| `Illustrious-XL-v1.0.safetensors` | 6.9G | [OnomaAIResearch/Illustrious-XL-v1.0](https://huggingface.co/OnomaAIResearch/Illustrious-XL-v1.0) | `checkpoints/` |
+
+```bash
+# hf CLI 一把梭（前三个一个仓，最后一个单独）
+huggingface-cli download Comfy-Org/MOSS-Image \
+  diffusion_models/moss_image_sft_int8_convrot.safetensors \
+  text_encoders/qwen3.5_9b_w4a8_gptq.safetensors \
+  vae/flux2-vae.safetensors \
+  --local-dir ComfyUI/models-download
+# 下完把三个文件挪进对应子目录（diffusion_models / text_encoders / vae）
+
+huggingface-cli download OnomaAIResearch/Illustrious-XL-v1.0 \
+  Illustrious-XL-v1.0.safetensors --local-dir ComfyUI/models/checkpoints
+
+# 或者裸 URL（wget / curl -L 直接下）
+# https://huggingface.co/Comfy-Org/MOSS-Image/resolve/main/diffusion_models/moss_image_sft_int8_convrot.safetensors
+# https://huggingface.co/Comfy-Org/MOSS-Image/resolve/main/text_encoders/qwen3.5_9b_w4a8_gptq.safetensors
+# https://huggingface.co/Comfy-Org/MOSS-Image/resolve/main/vae/flux2-vae.safetensors
+# https://huggingface.co/OnomaAIResearch/Illustrious-XL-v1.0/resolve/main/Illustrious-XL-v1.0.safetensors
+```
+
 写词关（`fishwords`）：把用户一句话翻成两台模型各自吃得下的词（moss 自然语言 / danbooru 标签），规则手册在 `painter/painter.md`；走本地 dsh headless 会话，失败回退 `api.deepseek.com`（要 `DEEPSEEK_API_KEY`）。
 
 ## 文件清单
