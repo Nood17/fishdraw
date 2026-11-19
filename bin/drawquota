@@ -1,0 +1,96 @@
+#!/usr/bin/env python3
+"""drawquota — 画图配额：除主人外，每人每天 5 张。
+
+用法：
+  drawquota check QQ   # 还有额度就扣 1 并放行（exit 0），否则 exit 3 并打印挡回话术
+  drawquota peek QQ    # 只看不扣
+  drawquota reset [QQ] # 清掉（给 QQ 就只清他，不给清全部）
+存储：$FISH_QUOTA_STORE（默认 ~/.local/state/fishdraw/draw_quota.json）
+"""
+import json
+import os
+import sys
+import time
+
+OWNER = int(os.environ.get("FISH_OWNER", "0"))  # 站长本人 QQ，不设=没人免配额
+LIMIT = 5
+STORE = os.environ.get("FISH_QUOTA_STORE", os.path.expanduser("~/.local/state/fishdraw/draw_quota.json"))
+
+
+def today():
+    return time.strftime("%Y-%m-%d")
+
+
+def load():
+    try:
+        with open(STORE, encoding="utf-8") as f:
+            d = json.load(f)
+        return d if isinstance(d, dict) else {}
+    except Exception:
+        return {}
+
+
+def save(d):
+    os.makedirs(os.path.dirname(STORE), exist_ok=True)
+    tmp = STORE + ".tmp"
+    with open(tmp, "w", encoding="utf-8") as f:
+        json.dump(d, f, ensure_ascii=False, indent=2)
+    os.replace(tmp, STORE)
+
+
+def trim(d):
+    """只留今天，别把历史一直攒着。"""
+    t = today()
+    for k in list(d):
+        if k != t:
+            d.pop(k, None)
+    return d
+
+
+def main():
+    if len(sys.argv) < 2:
+        print(__doc__)
+        return 2
+    cmd = sys.argv[1]
+    qq = (sys.argv[2] if len(sys.argv) > 2 else "").strip()
+    d = trim(load())
+    day = d.setdefault(today(), {})
+
+    if cmd == "reset":
+        if qq:
+            day.pop(qq, None)
+            save(d)
+            print(f"清掉了 {qq} 今天的次数")
+        else:
+            save({})
+            print("今天的次数全清了")
+        return 0
+
+    if not qq.isdigit():
+        print("要一个 QQ 号", file=sys.stderr)
+        return 2
+    seen = int(day.get(qq, 0))
+    if cmd == "peek":
+        if int(qq) == OWNER:
+            print("主人不限次数")
+        else:
+            print(f"{qq} 今天已画 {seen}/{LIMIT}，还剩 {max(0, LIMIT - seen)}")
+        return 0
+    if cmd != "check":
+        print(__doc__)
+        return 2
+
+    if int(qq) == OWNER:
+        print("主人不限次数")
+        return 0
+    if seen >= LIMIT:
+        print(f"今天的 {LIMIT} 张画完了，明天再来吧 🐳")
+        return 3
+    day[qq] = seen + 1
+    save(d)
+    print(f"放行：{qq} 今天第 {seen + 1}/{LIMIT} 张，还剩 {LIMIT - seen - 1}")
+    return 0
+
+
+if __name__ == "__main__":
+    sys.exit(main())

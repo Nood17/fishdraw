@@ -1,0 +1,110 @@
+#!/usr/bin/env bash
+# fishdraw — 对外只留一层壳：所有画图都走 fishpipe.py（初级→加工→+默认值→画两遍→输出→留档）
+# 用法: fishdraw "中文/口头描述" [输出.png] [--user QQ] [--chat group:<群号>|private:<QQ>]
+#       [--kind 种类] [--suffix "…"] [--tags "…"] [--no-writer] [--no-stage2]
+# 配额：--user 给的是谁就记谁的账；除站长（$FISH_OWNER）外每人每天 5 张；不给 --user 当站长自己用
+# 默认值：只有主人这单会拼 suffix.json 那三段；别人来画一律不拼（2026-11-19 主人定）
+# 排队（2026-11-19 主人定）：所有调用方（递话插件 / agent 会话 / 手动跑）都过这一条 →
+#   进来先取号，打印 "QUEUE <前面单数>"（前面 = 还在画的 + 在等的，票留到画完才撕）；
+#   给了 --chat 且前面有人时，脚本直接走 NapCat 代发一条「前面排队N人」；
+#   然后按号等画图锁，上一单没画完绝不跑下一单。
+set -uo pipefail
+SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
+QUOTA_BIN="${FISH_QUOTA_BIN:-$SCRIPT_DIR/drawquota}"
+QUEUE_DIR="${FISH_QUEUE_DIR:-$HOME/.local/state/fishdraw/draw-queue}"
+QUEUE_WAIT="${FISH_QUEUE_WAIT:-21600}"   # 排队最多等这么久（秒），超时撤单
+REQ="${1:?用法: fishdraw \"你想要什么\" [输出.png] [--user QQ] [--chat group:群号]}"
+shift 1
+OUT=""
+if [ $# -gt 0 ] && [ "${1:0:2}" != "--" ]; then OUT="$1"; shift 1; fi
+
+USER_QQ="${FISH_OWNER:-0}"
+CHAT=""
+ARGS=()
+while [ $# -gt 0 ]; do
+  case "$1" in
+    --user) USER_QQ="${2:?--user 后面要 QQ 号}"; shift 2 ;;
+    --chat) CHAT="${2:?--chat 后面要 group:群号 或 private:QQ号}"; shift 2 ;;
+    *) ARGS+=("$1"); shift ;;
+  esac
+done
+
+VERDICT="$(python3 "$QUOTA_BIN" check "$USER_QQ")"
+RC=$?
+echo "$VERDICT"
+if [ $RC -ne 0 ]; then
+  exit 3
+fi
+
+# ── 排队取号（进程级，谁调 fishdraw 都算进队里）─────────────────
+mkdir -p "$QUEUE_DIR"
+exec 9>"$QUEUE_DIR/.seq.lock"
+flock -w 30 9 || { echo "FAIL: 排队拿号锁拿不到"; exit 4; }
+now=$(date +%s)
+for t in "$QUEUE_DIR"/*.ticket; do
+  [ -e "$t" ] || continue
+  pid="$(head -n1 "$t" 2>/dev/null | tr -d '[:space:]')"
+  mtime=$(stat -c %Y "$t" 2>/dev/null || echo 0)
+  if [ -z "$pid" ] || ! kill -0 "$pid" 2>/dev/null || [ $((now - mtime)) -gt 21600 ]; then
+    rm -f "$t"   # 死票：进程没了或被 SIGKILL 留下的，别让位数越攒越多
+  fi
+done
+seq_file="$QUEUE_DIR/.next.seq"
+seq=$(cat "$seq_file" 2>/dev/null || echo 0)
+for t in "$QUEUE_DIR"/*.ticket; do
+  [ -e "$t" ] || continue
+  s="${t##*/}"; s="${s%%-*}"; s=$((10#$s))
+  [ "$s" -gt "$seq" ] && seq=$s     # 号从「存量票最大号」接着发，重启/清档后也不撞号
+done
+seq=$((seq + 1))
+echo "$seq" > "$seq_file"
+ticket="$QUEUE_DIR/$(printf %06d "$seq")-$$.ticket"
+echo "$$" > "$ticket"
+trap 'rm -f "$ticket"' EXIT   # 取票立刻挂销票：等锁时被掐掉也不留死票（SIGKILL 走的靠 GC）
+ahead=0
+for t in "$QUEUE_DIR"/*.ticket; do
+  [ -e "$t" ] || continue
+  s="${t##*/}"; s="${s%%-*}"; s=$((10#$s))
+  [ "$s" -lt "$seq" ] 2>/dev/null && ahead=$((ahead + 1))
+done
+flock -u 9
+echo "QUEUE $ahead"
+
+# 给了 --chat 且真在排：直接代发（调用方要是模型的话，命令没跑完它发不了言）
+if [ "$ahead" -gt 0 ] && [ -n "$CHAT" ]; then
+  CHAT="$CHAT" AHEAD="$ahead" python3 - <<'PY' || true
+import json, os, sys, urllib.request
+chat, ahead = os.environ["CHAT"], os.environ["AHEAD"]
+try:
+    cfg = json.load(open(os.environ.get("FISH_QQ_CONFIG", os.path.expanduser("~/.dsh/dsh-onebot-qq/config.json")), encoding="utf-8"))["napcat"]
+    base = str(cfg.get("httpUrl") or "http://127.0.0.1:3000").rstrip("/")
+    tok = str(cfg.get("httpToken") or "")
+except Exception:
+    base, tok = os.environ.get("NAPCAT_URL", "http://127.0.0.1:3000"), os.environ.get("NAPCAT_TOKEN", "")
+kind, _, cid = chat.partition(":")
+if kind == "group":
+    url, body = base + "/send_group_msg", {"group_id": int(cid), "message": f"前面排队{ahead}人，轮到就画"}
+elif kind == "private":
+    url, body = base + "/send_private_msg", {"user_id": int(cid), "message": f"前面排队{ahead}人，轮到就画"}
+else:
+    sys.exit(0)
+req = urllib.request.Request(url, data=json.dumps(body).encode(),
+    headers={"content-type": "application/json", "authorization": "Bearer " + tok})
+try:
+    urllib.request.urlopen(req, timeout=15).read()
+except Exception:
+    pass
+PY
+fi
+
+# ── 按号等画图锁：上一单没画完不跑下一单 ─────────────────────────
+exec 8>"$QUEUE_DIR/.draw.lock"
+if ! flock -w "$QUEUE_WAIT" 8; then
+  rm -f "$ticket"
+  echo "FAIL: 排队等了 ${QUEUE_WAIT}s 还没轮到，这单撤了"
+  exit 4
+fi
+python3 "${FISHPIPE:-$SCRIPT_DIR/../painter/fishpipe.py}" run --text "$REQ" --user "$USER_QQ" ${OUT:+--out "$OUT"} ${ARGS+"${ARGS[@]}"}
+RC=$?
+rm -f "$ticket"
+exit $RC

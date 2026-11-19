@@ -1,0 +1,19 @@
+{
+  "napcat": {
+    "wsUrl": "ws://127.0.0.1:3001",
+    "wsToken": "<onebot-token>",
+    "httpUrl": "http://127.0.0.1:3000",
+    "httpToken": "<onebot-token>"
+  },
+  "pluginConfig": {
+    "fish-relay": {
+      "enabled": true,
+      "keyword": "画一个",
+      "atRequiredInGroup": true,
+      "allowedGroups": "",
+      "masterOnly": false,
+      "timeoutSec": 3600,
+      "ack": "收到，画着呢……好了发回来"
+    }
+  }
+}
